@@ -2,7 +2,8 @@ import httpx
 import os
 import logging
 from fastapi import FastAPI, Request, HTTPException
-from pydantic import BaseSettings, Field, ValidationError
+from pydantic_settings import BaseSettings # ALTERADO: Importado de pydantic_settings
+from pydantic import Field, ValidationError
 
 # ========================
 # CONFIGURAÇÃO DE LOGGING
