@@ -7,7 +7,7 @@ app = FastAPI()
 # URLs e tokens da Z-API e Oracle
 ZAPI_URL = f"https://api.z-api.io/instances/{os.getenv('ZAPI_INSTANCE_ID')}/token/{os.getenv('ZAPI_TOKEN')}/send-message"
 ORACLE_AUTH = os.getenv("ORACLE_AUTH")
-WMS_API_BASE = "https://ta32.wms.ocs.oraclecloud.com/redwoodlogistics_test/wms/lgfapi/v10/entity/inventory"
+WMS_API_BASE = "https://ta3.wms.ocs.oraclecloud.com/tpicomp_test/wms/lgfapi/v10/entity/inventory"
 
 @app.post("/webhook")
 async def receive_message(request: Request):
