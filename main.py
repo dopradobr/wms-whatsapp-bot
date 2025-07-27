@@ -63,7 +63,7 @@ async def webhook(request: Request):
 
         # ✅ Responde apenas se a mensagem contiver "saldo "
         if "saldo wms " in texto_lower:
-            item = texto_lower.split("saldo ", 1)[1].strip()
+            item = texto_lower.split("saldo wms ", 1)[1].strip()
             resposta = await consultar_saldo(item)
             await enviar_mensagem(numero, resposta)
         else:
