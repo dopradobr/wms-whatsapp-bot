@@ -1,84 +1,81 @@
-import os
-import json
 from fastapi import FastAPI, Request
 import httpx
-from dotenv import load_dotenv
+import os
+import logging
 
-# Carrega variáveis do .env se estiver rodando localmente
-load_dotenv()
-
-# Inicializa o app FastAPI
 app = FastAPI()
 
-# Lê as variáveis de ambiente (segredos e configurações)
-ORACLE_API_URL = os.getenv("ORACLE_API_URL")  # URL da API do Oracle WMS
-ORACLE_AUTH = os.getenv("ORACLE_AUTH")        # Autenticação Basic do Oracle WMS
+# Configura o logger
+logging.basicConfig(level=logging.INFO)
 
-ZAPI_URL = f"https://api.z-api.io/instances/{os.getenv('ZAPI_INSTANCE_ID')}/token/{os.getenv('ZAPI_TOKEN')}/send-text"
-ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")  # Token do cliente Z-API
+# Variáveis de ambiente (definidas no Render)
+ORACLE_API_URL = os.getenv("ORACLE_API_URL")
+ORACLE_AUTH = os.getenv("ORACLE_AUTH")
+ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
+ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
+ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
 
-# Função auxiliar para consultar o Oracle WMS
-async def consultar_oracle_wms(item: str):
-    params = {
-        "q": f"item_id eq '{item}'"
-    }
+# URL base da API da Z-API
+ZAPI_BASE_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}"
 
+# Função para enviar mensagem pelo WhatsApp via Z-API
+async def enviar_mensagem(numero: str, mensagem: str):
+    url = f"{ZAPI_BASE_URL}/send-text"
     headers = {
-        "Authorization": ORACLE_AUTH,
-        "Accept": "application/json"
+        "Content-Type": "application/json",
+        "client-token": ZAPI_CLIENT_TOKEN  # Header exigido pela Z-API
+    }
+    payload = {
+        "phone": numero,
+        "message": mensagem
     }
 
     async with httpx.AsyncClient() as client:
-        response = await client.get(ORACLE_API_URL, params=params, headers=headers)
-        print("🔍 Resposta da API do WMS:", response.status_code, response.text)
+        response = await client.post(url, headers=headers, json=payload)
+        logging.info(f"Resposta da Z-API: {response.status_code} - {response.text}")
 
+# Função para consultar o saldo no Oracle WMS
+async def consultar_saldo(item: str):
+    url = f"{ORACLE_API_URL}&item_id={item}"
+    headers = {
+        "Authorization": ORACLE_AUTH
+    }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
         if response.status_code == 200:
             data = response.json()
-            items = data.get("items", [])
-            if items:
-                # Retorna o saldo (curr_qty) do primeiro resultado
-                return items[0].get("curr_qty", "Saldo não encontrado")
-        return "❌ Nenhum saldo encontrado para o item."
+            if data["count"] > 0:
+                # Somar todas as quantidades
+                total = sum([float(i.get("curr_qty", 0)) for i in data["items"]])
+                return f"Saldo atual do item {item}: {total}"
+            else:
+                return f"Nenhum saldo encontrado para o item {item}."
+        else:
+            return f"Erro ao consultar o saldo. Código: {response.status_code}"
 
-# Rota para o webhook (ponto de entrada das mensagens do WhatsApp)
+# Rota de Webhook do WhatsApp (Z-API envia as mensagens recebidas aqui)
 @app.post("/webhook")
 async def webhook(request: Request):
     payload = await request.json()
-    print("📥 Payload recebido:", json.dumps(payload, indent=2))
+    logging.info(f"Payload recebido: {payload}")
 
-    # Tenta extrair o telefone e o texto da mensagem
     try:
-        phone = payload["phone"]
-        message = payload["message"]["text"].get("body", "").strip().lower()
-    except Exception as e:
-        print("❌ Erro ao extrair dados do payload:", str(e))
-        return {"status": "error", "detail": "Invalid payload format"}
+        # Extrai o número e mensagem
+        numero = payload["phone"]
+        texto = payload["text"]["message"]
 
-    # Se a mensagem começar com "saldo", tratamos como consulta
-    if message.startswith("saldo"):
-        partes = message.split()
-        if len(partes) == 2:
-            item_id = partes[1]
-            saldo = await consultar_oracle_wms(item_id)
-            reply = f"📦 Saldo para o item {item_id}: {saldo}"
+        # Verifica se é uma consulta de saldo
+        if texto.lower().startswith("saldo "):
+            item = texto.split(" ", 1)[1].strip()
+            resposta = await consultar_saldo(item)
         else:
-            reply = "⚠️ Formato inválido. Use: saldo <item>"
-    else:
-        reply = "🤖 Comando não reconhecido. Use: saldo <item> para consultar o estoque."
+            resposta = "Comando não reconhecido. Envie por exemplo: saldo TEST123"
 
-    # Monta o payload e headers para envio via Z-API
-    send_payload = {
-        "phone": phone,
-        "message": reply
-    }
+        await enviar_mensagem(numero, resposta)
 
-    headers = {
-        "Client-Token": ZAPI_CLIENT_TOKEN
-    }
-
-    # Envia a resposta via WhatsApp usando a Z-API
-    async with httpx.AsyncClient() as client:
-        zapi_response = await client.post(ZAPI_URL, json=send_payload, headers=headers)
-        print("📨 Resposta da Z-API:", zapi_response.status_code, zapi_response.text)
+    except Exception as e:
+        logging.error(f"Erro ao processar a mensagem: {str(e)}")
+        return {"error": "Erro ao processar"}
 
     return {"status": "ok"}
