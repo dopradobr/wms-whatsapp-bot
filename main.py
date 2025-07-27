@@ -32,23 +32,60 @@ async def enviar_mensagem(numero: str, mensagem: str):
         response = await client.post(url, headers=headers, json=payload)
         logging.info(f"📨 Resposta da Z-API: {response.status_code} - {response.text}")
 
-# 🔍 Função que consulta o saldo de um item no Oracle WMS Cloud
+# 🔍 Função para consultar o saldo no Oracle WMS com formatação personalizada
 async def consultar_saldo(item: str):
     url = f"{ORACLE_API_URL}&item_id__code={item}"
     headers = {
         "Authorization": ORACLE_AUTH
     }
+
     async with httpx.AsyncClient() as client:
         response = await client.get(url, headers=headers)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("count", 0) > 0:
-                total = sum([float(i.get("curr_qty", 0)) for i in data.get("items", [])])
-                return f"📦 Saldo do item {item}: {total}"
-            else:
-                return f"❌ Nenhum saldo encontrado para o item {item}."
-        else:
+
+        if response.status_code != 200:
             return f"❌ Erro ao consultar o saldo. Código: {response.status_code}"
+
+        data = response.json()
+        registros = data.get("results", [])
+
+        if not registros:
+            return f"❌ Nenhum saldo encontrado para o item {item}."
+
+        total = sum(float(r.get("curr_qty", 0)) for r in registros)
+        qtd_registros = len(registros)
+        status_geral = registros[0].get("container_id__status_id__description", "—")
+
+        # Cabeçalho
+        resposta = [
+            f"📦 *Saldo encontrado para o item* `{item}`",
+            f"📄 *Status:* `{status_geral}`",
+            f"🔢 *Registros:* {qtd_registros}",
+            f"📊 *Total:* **{total:.2f} unidades**",
+            "",
+            "🔍 *Detalhamento:*"
+        ]
+
+        # Linhas detalhadas
+        for i, r in enumerate(registros[:20], start=1):  # Limite de até 20 registros
+            cod = r.get("item_id__code", "—")
+            lpn = r.get("container_id__container_nbr", "—")
+            qtd = r.get("curr_qty", 0)
+            loc = r.get("location_id__locn_str", "")
+            status = r.get("container_id__status_id__description", "").lower()
+
+            linha = [
+                f"{i}️⃣",
+                f"🆔 *Item:* `{cod}`",
+                f"📦 *LPN:* `{lpn}`",
+                f"📥 *Qtd:* `{qtd}`"
+            ]
+            if status != "received" and loc:
+                linha.append(f"📍 *Endereço:* `{loc}`")
+
+            resposta.append("\n".join(linha))
+
+        return "\n\n".join(resposta)
+
 
 # 📥 Endpoint que recebe mensagens do WhatsApp via webhook
 @app.post("/webhook")
