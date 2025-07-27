@@ -34,7 +34,7 @@ async def enviar_mensagem(numero: str, mensagem: str):
 
 # 🔍 Função para consultar o saldo no Oracle WMS
 async def consultar_saldo(item: str):
-    url = f"{ORACLE_API_URL}&item_id={item}"
+    url = f"{ORACLE_API_URL}&item_id__code={item}"
     headers = {
         "Authorization": ORACLE_AUTH
     }
