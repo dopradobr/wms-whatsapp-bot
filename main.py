@@ -33,6 +33,7 @@ async def enviar_mensagem(numero: str, mensagem: str):
         logging.info(f"📨 Resposta da Z-API: {response.status_code} - {response.text}")
 
 # 🔍 Função para consultar o saldo no Oracle WMS no modelo consultivo
+# 🔍 Function to check inventory balance in Oracle WMS (English version)
 async def consultar_saldo(item: str):
     url = f"{ORACLE_API_URL}&item_id__code={item}"
     headers = {
@@ -44,52 +45,52 @@ async def consultar_saldo(item: str):
             response = await client.get(url, headers=headers)
             data = response.json()
 
-        registros = data.get("results", [])
-        if not registros:
-            return f"❌ Nenhum saldo encontrado para o item {item}."
+        records = data.get("results", [])
+        if not records:
+            return f"❌ No stock found for item {item}."
 
-        # Separa os registros por status
-        recebidos = []
-        localizados = []
+        received = []
+        located = []
 
-        for r in registros:
+        for r in records:
             status = r.get("container_id__status_id__description", "").lower()
             info = {
                 "lpn": r.get("container_id__container_nbr", "-"),
-                "qtd": int(float(r.get("curr_qty", 0))),
-                "endereco": r.get("location_id__locn_str", "-")
+                "qty": int(float(r.get("curr_qty", 0))),
+                "location": r.get("location_id__locn_str", "-")
             }
             if status == "located":
-                localizados.append(info)
+                located.append(info)
             else:
-                recebidos.append(info)
+                received.append(info)
 
-        total_located = sum([i["qtd"] for i in localizados])
-        total_received = sum([i["qtd"] for i in recebidos])
+        total_located = sum([i["qty"] for i in located])
+        total_received = sum([i["qty"] for i in received])
 
-        resposta = [f"📦 Saldo para o item: {item.upper()}", ""]
+        response = [f"📦 Inventory balance for item: {item.upper()}", ""]
 
-        if localizados:
-            resposta.append("🔹 Located (Pronto para uso)")
-            for i in localizados:
-                linha = f"- LPN: {i['lpn']} | Qtd: {i['qtd']} | 📍 Endereço: {i['endereco']}"
-                resposta.append(linha)
-            resposta.append("")
+        if located:
+            response.append("🔹 Located (Ready for use)")
+            for i in located:
+                line = f"- LPN: {i['lpn']} | Qty: {i['qty']} | 📍 Location: {i['location']}"
+                response.append(line)
+            response.append("")
 
-        if recebidos:
-            resposta.append("🔸 Received (Ainda em recebimento)")
-            for i in recebidos:
-                linha = f"- LPN: {i['lpn']} | Qtd: {i['qtd']}"
-                resposta.append(linha)
-            resposta.append("")
+        if received:
+            response.append("🔸 Received (Pending receipt)")
+            for i in received:
+                line = f"- LPN: {i['lpn']} | Qty: {i['qty']}"
+                response.append(line)
+            response.append("")
 
-        resposta.append(f"📊 Total localizado: {total_located}")
-        resposta.append(f"📊 Total recebido: {total_received}")
+        response.append(f"📊 Total Located: {total_located}")
+        response.append(f"📊 Total Received: {total_received}")
 
-        return "\n".join(resposta)
+        return "\n".join(response)
 
     except Exception as e:
-        return f"❌ Erro ao consultar o saldo: {str(e)}"
+        return f"❌ Error checking inventory: {str(e)}"
+
 
 
 
