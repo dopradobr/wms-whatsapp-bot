@@ -33,58 +33,79 @@ async def enviar_mensagem(numero: str, mensagem: str):
         logging.info(f"📨 Resposta da Z-API: {response.status_code} - {response.text}")
 
 # 🔍 Função para consultar o saldo no Oracle WMS com formatação personalizada
+# 🔍 Função para consultar saldo de um item no Oracle WMS Cloud
 async def consultar_saldo(item: str):
+    # Monta a URL da API com o código do item como parâmetro
     url = f"{ORACLE_API_URL}&item_id__code={item}"
+    
+    # Define o cabeçalho com a autorização do Oracle WMS
     headers = {
         "Authorization": ORACLE_AUTH
     }
 
+    # Inicia a requisição HTTP assíncrona
     async with httpx.AsyncClient() as client:
         response = await client.get(url, headers=headers)
 
-        if response.status_code != 200:
-            return f"❌ Erro ao consultar o saldo. Código: {response.status_code}"
+        # Se a resposta for OK (200), processa os dados
+        if response.status_code == 200:
+            data = response.json()
 
-        data = response.json()
-        registros = data.get("results", [])
+            # Extrai a lista de resultados
+            resultados = data.get("results", [])
 
-        if not registros:
-            return f"❌ Nenhum saldo encontrado para o item {item}."
+            # Se não houver resultados, informa ao usuário
+            if not resultados:
+                return f"❌ Nenhum saldo encontrado para o item {item}."
 
-        total = sum(float(r.get("curr_qty", 0)) for r in registros)
-        qtd_registros = len(registros)
-        status_geral = registros[0].get("container_id__status_id__description", "—")
+            # Ordena os resultados por status (ex: Received, Located)
+            resultados.sort(key=lambda x: x.get("container_id__status_id__description", "").lower())
 
-        # Cabeçalho
-        resposta = [
-            f"📦 *Saldo encontrado para o item* `{item}`",
-            f"📄 *Status:* `{status_geral}`",
-            f"🔢 *Registros:* {qtd_registros}",
-            f"📊 *Total:* **{total:.2f} unidades**",
-            "",
-            "🔍 *Detalhamento:*"
-        ]
+            # Calcula o total de quantidades somando os campos curr_qty
+            total = sum([float(i.get("curr_qty", 0)) for i in resultados])
+            total = int(total)  # Remove casas decimais para visualização no WhatsApp
 
-        # Linhas detalhadas
-        for i, r in enumerate(registros[:20], start=1):  # Limite de até 20 registros
-            cod = r.get("item_id__code", "—")
-            lpn = r.get("container_id__container_nbr", "—")
-            qtd = r.get("curr_qty", 0)
-            loc = r.get("location_id__locn_str", "")
-            status = r.get("container_id__status_id__description", "").lower()
+            # Extrai e organiza os diferentes status encontrados
+            status_set = set(i.get("container_id__status_id__description", "—") for i in resultados)
+            status_text = " / ".join(sorted(status_set))
 
-            linha = [
-                f"{i}️⃣",
-                f"🆔 *Item:* `{cod}`",
-                f"📦 *LPN:* `{lpn}`",
-                f"📥 *Qtd:* `{qtd}`"
+            # Inicia a resposta formatada com resumo geral
+            resposta = [
+                f"📦 Saldo encontrado para o item: {item}",
+                f"📄 Status: {status_text}",
+                f"🔢 Registros: {len(resultados)}",
+                f"📊 Total: {total} unidades",
+                "",
+                "*Detalhamento:*"
             ]
-            if status != "received" and loc:
-                linha.append(f"📍 *Endereço:* `{loc}`")
 
-            resposta.append("\n".join(linha))
+            # Itera sobre cada registro e monta o detalhamento
+            for idx, r in enumerate(resultados, start=1):
+                lpn = r.get("container_id__container_nbr", "—")  # LPN (número do contêiner)
+                qtd = int(float(r.get("curr_qty", 0)))            # Quantidade, sem decimais
+                status = r.get("container_id__status_id__description", "")  # Status (ex: Received)
+                endereco = r.get("location_id__locn_str", "").strip()       # Endereço (quando aplicável)
 
-        return "\n\n".join(resposta)
+                # Monta os detalhes do registro
+                detalhe = [
+                    f"{idx}.",                  # Número sequencial
+                    f"📦 LPN: {lpn}",            # LPN do item
+                    f"📥 Qtd: {qtd}"             # Quantidade
+                ]
+
+                # Adiciona endereço apenas se o status NÃO for "Received"
+                if status.lower() != "received":
+                    detalhe.append(f"📍 Endereço: {endereco or '—'}")
+
+                # Junta os detalhes e adiciona à resposta final
+                resposta.append("\n".join(detalhe))
+
+            # Junta todas as linhas com espaçamento e retorna
+            return "\n\n".join(resposta)
+
+        else:
+            # Caso a resposta não seja 200, retorna o erro HTTP
+            return f"❌ Erro ao consultar o saldo. Código: {response.status_code}"
 
 
 # 📥 Endpoint que recebe mensagens do WhatsApp via webhook
