@@ -4,12 +4,13 @@ import os
 
 app = FastAPI()
 
+# Variáveis de ambiente
 ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
 ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
 ZAPI_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-message"
 
 ORACLE_AUTH = os.getenv("ORACLE_AUTH")
-WMS_API_BASE = os.getenv("ORACLE_API_URL")  # URL completa com parâmetros fixos
+WMS_API_BASE = os.getenv("ORACLE_API_URL")
 
 @app.post("/webhook")
 async def receive_message(request: Request):
@@ -18,7 +19,10 @@ async def receive_message(request: Request):
     phone = body.get("message", {}).get("from", "")
 
     if not message or not phone:
+        print("❌ Mensagem ou telefone não encontrados no payload recebido.")
         return {"status": "ignored"}
+
+    print(f"📩 Mensagem recebida de {phone}: {message}")
 
     if "saldo" in message:
         item_code = message.replace("saldo", "").strip()
@@ -36,13 +40,17 @@ async def receive_message(request: Request):
             async with httpx.AsyncClient() as client:
                 response = await client.get(WMS_API_BASE, params=params, headers=headers)
                 data = response.json()
+                print("🔎 Resposta da API do WMS:", data)
         except Exception as e:
+            error_msg = f"❌ Erro ao consultar o WMS: {str(e)}"
+            print(error_msg)
             await httpx.post(ZAPI_URL, json={
                 "phone": phone,
-                "message": f"❌ Erro ao consultar o WMS: {str(e)}"
+                "message": error_msg
             })
             return {"status": "error"}
 
+        # Montar resposta
         if isinstance(data, list) and len(data) > 0:
             reply_lines = [f"📦 Resultado para o item {item_code}:"]
             for i, item in enumerate(data[:5], start=1):
@@ -56,9 +64,16 @@ async def receive_message(request: Request):
         else:
             reply = f"❌ Nenhum saldo encontrado para o item {item_code}."
 
-        await httpx.post(ZAPI_URL, json={
+        # Enviar mensagem para o WhatsApp via Z-API com debug
+        send_payload = {
             "phone": phone,
             "message": reply
-        })
+        }
+
+        print("📤 Enviando para Z-API:", send_payload)
+
+        async with httpx.AsyncClient() as client:
+            zapi_response = await client.post(ZAPI_URL, json=send_payload)
+            print("📨 Resposta da Z-API:", zapi_response.status_code, zapi_response.text)
 
     return {"status": "ok"}
