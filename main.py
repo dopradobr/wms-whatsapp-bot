@@ -15,8 +15,14 @@ WMS_API_BASE = os.getenv("ORACLE_API_URL")
 @app.post("/webhook")
 async def receive_message(request: Request):
     body = await request.json()
-    message = body.get("message", {}).get("text", "").lower()
-    phone = body.get("message", {}).get("from", "")
+
+    # Log do conteúdo completo recebido no webhook
+    print("📥 Payload recebido:", body)
+
+    # Tenta extrair mensagem e número
+    message_data = body.get("message", {})
+    message = message_data.get("text", "").lower()
+    phone = message_data.get("from", "")
 
     if not message or not phone:
         print("❌ Mensagem ou telefone não encontrados no payload recebido.")
@@ -50,7 +56,6 @@ async def receive_message(request: Request):
             })
             return {"status": "error"}
 
-        # Montar resposta
         if isinstance(data, list) and len(data) > 0:
             reply_lines = [f"📦 Resultado para o item {item_code}:"]
             for i, item in enumerate(data[:5], start=1):
@@ -64,7 +69,6 @@ async def receive_message(request: Request):
         else:
             reply = f"❌ Nenhum saldo encontrado para o item {item_code}."
 
-        # Enviar mensagem para o WhatsApp via Z-API com debug
         send_payload = {
             "phone": phone,
             "message": reply
