@@ -4,20 +4,25 @@ import os
 
 app = FastAPI()
 
-# Configurações de ambiente
+# Variáveis de ambiente
 ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
 ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
-ZAPI_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-text"
-
+ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
 ORACLE_AUTH = os.getenv("ORACLE_AUTH")
 WMS_API_BASE = os.getenv("ORACLE_API_URL")
+
+# URL da Z-API com clientToken
+ZAPI_URL = (
+    f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-message"
+    f"?clientToken={ZAPI_CLIENT_TOKEN}"
+)
 
 @app.post("/webhook")
 async def receive_message(request: Request):
     body = await request.json()
     print("📥 Payload recebido:", body)
 
-    # Verifica se é mensagem recebida de usuário
+    # Mensagem recebida do WhatsApp (não foi enviada pela API)
     if not body.get("fromApi", True):
         message_text = body.get("text", {}).get("message", "").lower().strip()
         phone = body.get("phone", "")
