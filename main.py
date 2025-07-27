@@ -4,25 +4,21 @@ import os
 
 app = FastAPI()
 
-# Variáveis de ambiente
+# Configurações de ambiente
 ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
 ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
 ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
+ZAPI_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-message"
+
 ORACLE_AUTH = os.getenv("ORACLE_AUTH")
 WMS_API_BASE = os.getenv("ORACLE_API_URL")
-
-# URL da Z-API com clientToken
-ZAPI_URL = (
-    f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-message"
-    f"?clientToken={ZAPI_CLIENT_TOKEN}"
-)
 
 @app.post("/webhook")
 async def receive_message(request: Request):
     body = await request.json()
     print("📥 Payload recebido:", body)
 
-    # Mensagem recebida do WhatsApp (não foi enviada pela API)
+    # Verifica se veio de fora
     if not body.get("fromApi", True):
         message_text = body.get("text", {}).get("message", "").lower().strip()
         phone = body.get("phone", "")
@@ -52,7 +48,7 @@ async def receive_message(request: Request):
             except Exception as e:
                 error_msg = f"❌ Erro ao consultar o WMS: {str(e)}"
                 print(error_msg)
-                await httpx.post(ZAPI_URL, json={"phone": phone, "message": error_msg})
+                await send_whatsapp_message(phone, error_msg)
                 return {"status": "error"}
 
             if isinstance(data, list) and len(data) > 0:
@@ -68,15 +64,22 @@ async def receive_message(request: Request):
             else:
                 reply = f"❌ Nenhum saldo encontrado para o item {item_code}."
 
-            send_payload = {
-                "phone": phone,
-                "message": reply
-            }
-
-            print("📤 Enviando para Z-API:", send_payload)
-
-            async with httpx.AsyncClient() as client:
-                zapi_response = await client.post(ZAPI_URL, json=send_payload)
-                print("📨 Resposta da Z-API:", zapi_response.status_code, zapi_response.text)
+            await send_whatsapp_message(phone, reply)
 
     return {"status": "ok"}
+
+async def send_whatsapp_message(phone: str, message: str):
+    send_payload = {
+        "phone": phone,
+        "message": message
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "client-token": ZAPI_CLIENT_TOKEN
+    }
+
+    print("📤 Enviando para Z-API:", send_payload)
+    async with httpx.AsyncClient() as client:
+        response = await client.post(ZAPI_URL, json=send_payload, headers=headers)
+        print("📨 Resposta da Z-API:", response.status_code, response.text)
