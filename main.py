@@ -1,13 +1,13 @@
 from fastapi import FastAPI, Request
 import httpx
 import os
-import re
 
 app = FastAPI()
 
+# Configurações de ambiente
 ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
 ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
-ZAPI_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-message"
+ZAPI_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-text"
 
 ORACLE_AUTH = os.getenv("ORACLE_AUTH")
 WMS_API_BASE = os.getenv("ORACLE_API_URL")
@@ -17,20 +17,14 @@ async def receive_message(request: Request):
     body = await request.json()
     print("📥 Payload recebido:", body)
 
-    # Ignora chamadas da própria API
+    # Verifica se é mensagem recebida de usuário
     if not body.get("fromApi", True):
         message_text = body.get("text", {}).get("message", "").lower().strip()
-        raw_phone = body.get("phone", "").strip()
-        phone = re.sub(r"\D", "", raw_phone)  # Remove tudo que não é número
+        phone = body.get("phone", "")
 
         if not message_text or not phone:
             print("❌ Mensagem ou telefone não encontrados no payload recebido.")
             return {"status": "ignored"}
-
-        # Validação simples do número
-        if not phone.startswith("55") or len(phone) < 12 or len(phone) > 13:
-            print(f"❌ Número de telefone inválido: {phone}")
-            return {"status": "invalid phone"}
 
         print(f"📩 Mensagem recebida de {phone}: {message_text}")
 
@@ -56,7 +50,6 @@ async def receive_message(request: Request):
                 await httpx.post(ZAPI_URL, json={"phone": phone, "message": error_msg})
                 return {"status": "error"}
 
-            # Formatar a resposta
             if isinstance(data, list) and len(data) > 0:
                 reply_lines = [f"📦 Resultado para o item {item_code}:"]
                 for i, item in enumerate(data[:5], start=1):
