@@ -10,7 +10,7 @@ ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
 ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
 
 # 🔗 URL base para envio de mensagens via Z-API
-ZAPI_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-text"
+ZAPI_URL = f"https://api.z-api.io/instances/3E4D04FCB68A507887150A2BD80273F2/token/437CC79EA4B7E858ED5FB058/send-text"
 
 # 🔐 Autenticação e URL da API do Oracle WMS
 ORACLE_AUTH = os.getenv("ORACLE_AUTH")
