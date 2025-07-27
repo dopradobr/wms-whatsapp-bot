@@ -1,92 +1,84 @@
+import os
+import json
 from fastapi import FastAPI, Request
 import httpx
-import os
+from dotenv import load_dotenv
 
+# Carrega variáveis do .env se estiver rodando localmente
+load_dotenv()
+
+# Inicializa o app FastAPI
 app = FastAPI()
 
-# 🔐 Variáveis de ambiente para autenticação da Z-API (WhatsApp)
-ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
-ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
-ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
+# Lê as variáveis de ambiente (segredos e configurações)
+ORACLE_API_URL = os.getenv("ORACLE_API_URL")  # URL da API do Oracle WMS
+ORACLE_AUTH = os.getenv("ORACLE_AUTH")        # Autenticação Basic do Oracle WMS
 
-# 🔗 URL base para envio de mensagens via Z-API
-ZAPI_URL = f"https://api.z-api.io/instances/3E4D04FCB68A507887150A2BD80273F2/token/437CC79EA4B7E858ED5FB058/send-text"
+ZAPI_URL = f"https://api.z-api.io/instances/{os.getenv('ZAPI_INSTANCE_ID')}/token/{os.getenv('ZAPI_TOKEN')}/send-text"
+ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")  # Token do cliente Z-API
 
-# 🔐 Autenticação e URL da API do Oracle WMS
-ORACLE_AUTH = os.getenv("ORACLE_AUTH")
-WMS_API_BASE = os.getenv("ORACLE_API_URL")
+# Função auxiliar para consultar o Oracle WMS
+async def consultar_oracle_wms(item: str):
+    params = {
+        "q": f"item_id eq '{item}'"
+    }
 
+    headers = {
+        "Authorization": ORACLE_AUTH,
+        "Accept": "application/json"
+    }
 
+    async with httpx.AsyncClient() as client:
+        response = await client.get(ORACLE_API_URL, params=params, headers=headers)
+        print("🔍 Resposta da API do WMS:", response.status_code, response.text)
+
+        if response.status_code == 200:
+            data = response.json()
+            items = data.get("items", [])
+            if items:
+                # Retorna o saldo (curr_qty) do primeiro resultado
+                return items[0].get("curr_qty", "Saldo não encontrado")
+        return "❌ Nenhum saldo encontrado para o item."
+
+# Rota para o webhook (ponto de entrada das mensagens do WhatsApp)
 @app.post("/webhook")
-async def receive_message(request: Request):
-    # 🔍 Recebe e exibe o payload recebido
-    body = await request.json()
-    print("📥 Payload recebido:", body)
+async def webhook(request: Request):
+    payload = await request.json()
+    print("📥 Payload recebido:", json.dumps(payload, indent=2))
 
-    # ⚠️ Verifica se a mensagem veio de fora da API (usuário humano)
-    if not body.get("fromApi", True):
-        # Extrai e normaliza o texto da mensagem e telefone
-        message_text = body.get("text", {}).get("message", "").lower().strip()
-        phone = body.get("phone", "").strip()
+    # Tenta extrair o telefone e o texto da mensagem
+    try:
+        phone = payload["phone"]
+        message = payload["message"]["text"].get("body", "").strip().lower()
+    except Exception as e:
+        print("❌ Erro ao extrair dados do payload:", str(e))
+        return {"status": "error", "detail": "Invalid payload format"}
 
-        if not message_text or not phone:
-            print("❌ Mensagem ou telefone não encontrados no payload recebido.")
-            return {"status": "ignored"}
+    # Se a mensagem começar com "saldo", tratamos como consulta
+    if message.startswith("saldo"):
+        partes = message.split()
+        if len(partes) == 2:
+            item_id = partes[1]
+            saldo = await consultar_oracle_wms(item_id)
+            reply = f"📦 Saldo para o item {item_id}: {saldo}"
+        else:
+            reply = "⚠️ Formato inválido. Use: saldo <item>"
+    else:
+        reply = "🤖 Comando não reconhecido. Use: saldo <item> para consultar o estoque."
 
-        print(f"📩 Mensagem recebida de {phone}: {message_text}")
+    # Monta o payload e headers para envio via Z-API
+    send_payload = {
+        "phone": phone,
+        "message": reply
+    }
 
-        # 🔎 Se a mensagem contiver a palavra "saldo", inicia a busca no WMS
-        if "saldo" in message_text:
-            item_code = message_text.replace("saldo", "").strip()
+    headers = {
+        "Client-Token": ZAPI_CLIENT_TOKEN
+    }
 
-            headers = {
-                "Authorization": ORACLE_AUTH,
-                "Content-Type": "application/json"
-            }
-            params = {
-                "item_id__code": item_code
-            }
-
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(WMS_API_BASE, params=params, headers=headers)
-                    data = response.json()
-                    print("🔎 Resposta da API do WMS:", data)
-            except Exception as e:
-                error_msg = f"❌ Erro ao consultar o WMS: {str(e)}"
-                print(error_msg)
-                await httpx.post(ZAPI_URL, json={
-                    "phone": phone,
-                    "message": error_msg,
-                    "clientToken": ZAPI_CLIENT_TOKEN
-                })
-                return {"status": "error"}
-
-            # 🔁 Formata a resposta para o usuário
-            if isinstance(data, list) and len(data) > 0:
-                reply_lines = [f"📦 Resultado para o item {item_code}:"]
-                for i, item in enumerate(data[:5], start=1):
-                    qty = item.get("curr_qty", "0")
-                    loc = item.get("location_id__locn_str") or "—"
-                    container = item.get("container_id__container_nbr", "—")
-                    status = item.get("container_id__status_id__description", "—")
-                    reply_lines.append(f"{i}. Qty: {qty} | Loc: {loc} | Ctn: {container} | {status}")
-                reply_lines.append("\n📩 Para consultar outro item, envie: saldo [código]")
-                reply = "\n".join(reply_lines)
-            else:
-                reply = f"❌ Nenhum saldo encontrado para o item {item_code}."
-
-            # 📤 Envia a resposta via Z-API
-            send_payload = {
-                "phone": phone,
-                "message": reply,
-                "clientToken": ZAPI_CLIENT_TOKEN
-            }
-
-            print("📤 Enviando para Z-API:", send_payload)
-
-            async with httpx.AsyncClient() as client:
-                zapi_response = await client.post(ZAPI_URL, json=send_payload)
-                print("📨 Resposta da Z-API:", zapi_response.status_code, zapi_response.text)
+    # Envia a resposta via WhatsApp usando a Z-API
+    async with httpx.AsyncClient() as client:
+        zapi_response = await client.post(ZAPI_URL, json=send_payload, headers=headers)
+        print("📨 Resposta da Z-API:", zapi_response.status_code, zapi_response.text)
 
     return {"status": "ok"}
