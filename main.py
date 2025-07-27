@@ -3,26 +3,26 @@ import httpx
 import os
 import logging
 
-# Inicializa o app e o logger
+# Inicializa a aplicação FastAPI e configura o logger
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
-# Carrega variáveis de ambiente
+# 🔐 Carrega variáveis de ambiente da Render (configuradas no painel)
 ORACLE_API_URL = os.getenv("ORACLE_API_URL")
 ORACLE_AUTH = os.getenv("ORACLE_AUTH")
 ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
 ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
 ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
 
-# Monta a URL base da Z-API
+# 🔗 Monta a URL base da Z-API com instance e token
 ZAPI_BASE_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}"
 
-# 🔁 Função para enviar mensagem no WhatsApp via Z-API
+# 📤 Função para enviar mensagens via Z-API (WhatsApp)
 async def enviar_mensagem(numero: str, mensagem: str):
     url = f"{ZAPI_BASE_URL}/send-text"
     headers = {
         "Content-Type": "application/json",
-        "client-token": ZAPI_CLIENT_TOKEN
+        "client-token": ZAPI_CLIENT_TOKEN  # Cabeçalho obrigatório
     }
     payload = {
         "phone": numero,
@@ -32,7 +32,7 @@ async def enviar_mensagem(numero: str, mensagem: str):
         response = await client.post(url, headers=headers, json=payload)
         logging.info(f"📨 Resposta da Z-API: {response.status_code} - {response.text}")
 
-# 🔍 Função para consultar o saldo no Oracle WMS
+# 🔍 Função que consulta o saldo de um item no Oracle WMS Cloud
 async def consultar_saldo(item: str):
     url = f"{ORACLE_API_URL}&item_id__code={item}"
     headers = {
@@ -50,7 +50,7 @@ async def consultar_saldo(item: str):
         else:
             return f"❌ Erro ao consultar o saldo. Código: {response.status_code}"
 
-# 📥 Rota principal de entrada de mensagens via webhook do WhatsApp
+# 📥 Endpoint que recebe mensagens do WhatsApp via webhook
 @app.post("/webhook")
 async def webhook(request: Request):
     payload = await request.json()
@@ -61,9 +61,12 @@ async def webhook(request: Request):
         texto = payload.get("text", {}).get("message", "").strip()
         texto_lower = texto.lower()
 
-        # ✅ Responde apenas se a mensagem contiver "saldo "
+        # ✅ Só responde se a mensagem contiver "saldo wms "
         if "saldo wms " in texto_lower:
-            item = texto_lower.split("saldo wms ", 1)[1].strip()
+            # Extrai o valor após "saldo wms " e transforma em MAIÚSCULO
+            item_raw = texto_lower.split("saldo wms ", 1)[1].strip()
+            item = item_raw.upper()  # Força sempre maiúsculo
+            logging.info(f"🔎 Item extraído: {item}")
             resposta = await consultar_saldo(item)
             await enviar_mensagem(numero, resposta)
         else:
