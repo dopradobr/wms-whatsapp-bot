@@ -13,6 +13,7 @@ ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
 
 ZAPI_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}"
 
+
 # Função para enviar mensagens pelo WhatsApp
 async def send_whatsapp_message(phone: str, message: str, buttons=None):
     payload = {"phone": phone, "message": message}
