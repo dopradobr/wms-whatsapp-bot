@@ -5,9 +5,12 @@ import os
 
 app = FastAPI()
 
-ZAPI_URL = os.getenv("ZAPI_URL", "https://api.z-api.io/instances/YOUR_INSTANCE/token/YOUR_TOKEN/send-text")
-ZAPI_INSTANCE_TOKEN = os.getenv("ZAPI_INSTANCE_TOKEN", "YOUR_INSTANCE_TOKEN")
-ZAPI_API_TOKEN = os.getenv("ZAPI_API_TOKEN", "YOUR_API_TOKEN")
+
+ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
+ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
+
+ZAPI_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_CLIENT_TOKEN}/send-text"
+
 
 # Função para enviar mensagem no WhatsApp
 def send_message(phone: str, text: str):
