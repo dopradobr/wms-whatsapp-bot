@@ -1,7 +1,6 @@
-
 import os
 import requests
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -69,15 +68,12 @@ async def whatsapp_webhook(msg: WhatsAppMessage):
             send_whatsapp_message(phone, "⚠️ Nenhum LPN encontrado no recebimento.")
             return JSONResponse(content={"status": "ok"})
 
-        msg_lines = ["📦 Saldo no Recebimento:
-"]
+        msg_lines = ["📦 Saldo no Recebimento:\n"]
         for r in data["results"]:
             msg_lines.append(f"• LPN: {r['container_id__container_nbr']} | Item: {r['item_id__code']} | Qtd: {int(r['curr_qty'])}")
-        msg_lines.append(f"
-📊 Total de LPNs: {len(data['results'])}")
+        msg_lines.append(f"\n📊 Total de LPNs: {len(data['results'])}")
 
-        send_whatsapp_message(phone, "
-".join(msg_lines))
+        send_whatsapp_message(phone, "\n".join(msg_lines))
         return JSONResponse(content={"status": "ok"})
 
     elif message == "saldo_item":
@@ -99,24 +95,20 @@ async def whatsapp_webhook(msg: WhatsAppMessage):
         located = [r for r in data["results"] if r["container_id__status_id__description"] == "Located"]
         received = [r for r in data["results"] if r["container_id__status_id__description"] == "Received"]
 
-        msg_lines = [f"📦 Saldo para o item: {item_code}
-"]
+        msg_lines = [f"📦 Saldo para o item: {item_code}\n"]
         if located:
             msg_lines.append("🔹 Located (Pronto para uso)")
             for r in located:
                 msg_lines.append(f"- LPN: {r['container_id__container_nbr']} | Qtd: {int(r['curr_qty'])} | 📍 Endereço: {r['location_id__locn_str']}")
         if received:
-            msg_lines.append("
-🔸 Received (Ainda em recebimento)")
+            msg_lines.append("\n🔸 Received (Ainda em recebimento)")
             for r in received:
                 msg_lines.append(f"- LPN: {r['container_id__container_nbr']} | Qtd: {int(r['curr_qty'])}")
 
-        msg_lines.append(f"
-📊 Total localizado: {sum(int(r['curr_qty']) for r in located)}")
+        msg_lines.append(f"\n📊 Total localizado: {sum(int(r['curr_qty']) for r in located)}")
         msg_lines.append(f"📊 Total recebido: {sum(int(r['curr_qty']) for r in received)}")
 
-        send_whatsapp_message(phone, "
-".join(msg_lines))
+        send_whatsapp_message(phone, "\n".join(msg_lines))
         return JSONResponse(content={"status": "ok"})
 
     elif message == "saldo_item_enderecado":
@@ -135,13 +127,11 @@ async def whatsapp_webhook(msg: WhatsAppMessage):
             send_whatsapp_message(phone, f"⚠️ Nenhum saldo encontrado para o item {item_code}.")
             return JSONResponse(content={"status": "ok"})
 
-        msg_lines = [f"🏷 Saldo para o item: {item_code}
-"]
+        msg_lines = [f"🏷 Saldo para o item: {item_code}\n"]
         for r in data["results"]:
             msg_lines.append(f"- LPN: {r['container_id__container_nbr']} | 📍 Endereço: {r['location_id__locn_str']} | Qtd: {int(r['curr_qty'])}")
 
-        send_whatsapp_message(phone, "
-".join(msg_lines))
+        send_whatsapp_message(phone, "\n".join(msg_lines))
         return JSONResponse(content={"status": "ok"})
 
     return JSONResponse(content={"status": "ignored"})
