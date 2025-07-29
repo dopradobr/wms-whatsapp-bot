@@ -57,7 +57,7 @@ async def consultar_saldo(item: str):
             info = {
                 "lpn": r.get("container_id__container_nbr", "-"),
                 "qty": int(float(r.get("curr_qty", 0))),
-                "location": r.get("location_id__locn_str", "-")
+                "location": r.get("container_id__curr_location_id__locn_str", "-")
             }
             if status == "located":
                 located.append(info)
