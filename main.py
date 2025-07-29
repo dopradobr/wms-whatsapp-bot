@@ -42,7 +42,8 @@ async def whatsapp_webhook(request: Request):
     print("📩 Payload recebido do Z-API:", data)
 
     phone = data.get("phone")
-    message = data.get("message", {}).get("message")
+    message = data.get("text", {}).get("message")
+
 
     if not phone or not message:
         return JSONResponse(content={"status": "error", "message": "Campos 'phone' e 'message' ausentes"}, status_code=400)
