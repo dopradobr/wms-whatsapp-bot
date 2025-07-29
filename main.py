@@ -1,82 +1,80 @@
 import os
 import requests
-from fastapi import FastAPI, Request
-from pydantic import BaseModel
-from typing import Optional
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+import uvicorn
 
-# =========================
-# CONFIGURAÇÕES DO AMBIENTE
-# =========================
-ZAPI_URL = os.getenv("ZAPI_URL")  # URL da sua instância Z-API
-ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")  # Token da sua instância Z-API
-WMS_URL = os.getenv("WMS_URL")  # URL base do Oracle WMS Cloud
-WMS_LOGIN = os.getenv("WMS_LOGIN")  # Usuário WMS
-WMS_PASSWORD = os.getenv("WMS_PASSWORD")  # Senha WMS
+# Carregar variáveis de ambiente
+load_dotenv()
 
-# =========================
-# APP FASTAPI
-# =========================
+# Variáveis de ambiente
+ORACLE_API_URL = os.getenv("ORACLE_API_URL")
+ORACLE_AUTH = os.getenv("ORACLE_AUTH")
+ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
+ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
+ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
+
+# URL base da Z-API
+ZAPI_BASE_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}"
+
 app = FastAPI()
 
+# Estado do usuário (para saber se está aguardando o item)
+user_state = {}
 
-# Modelo de recebimento de mensagens do WhatsApp
-class WhatsAppMessage(BaseModel):
-    phone: str
-    text: str
-    messageId: Optional[str] = None
-
-# Função para enviar mensagem normal no WhatsApp
-def send_whatsapp_message(phone, text):
-    payload = {"phone": phone, "message": text}
-    requests.post(f"{ZAPI_URL}/send-text", headers={"client-token": ZAPI_TOKEN}, json=payload)
-
-# Função para enviar botões no WhatsApp
-def send_whatsapp_buttons(phone, body, buttons):
+# Função para enviar mensagem no WhatsApp
+def send_whatsapp_message(phone: str, message: str):
     payload = {
         "phone": phone,
-        "message": body,
-        "buttons": [{"id": f"btn_{i}", "text": btn} for i, btn in enumerate(buttons, start=1)]
+        "message": message
     }
-    requests.post(f"{ZAPI_URL}/send-buttons", headers={"client-token": ZAPI_TOKEN}, json=payload)
+    requests.post(f"{ZAPI_BASE_URL}/send-text", json=payload)
 
-# Função para consultar saldo no WMS
-def consultar_wms(filtro_item=None, enderecado=False, recebimento=False):
+# Função para enviar botões no WhatsApp
+def send_whatsapp_buttons(phone: str, message: str, buttons: list):
+    payload = {
+        "phone": phone,
+        "message": message,
+        "buttons": [{"id": str(i+1), "text": btn} for i, btn in enumerate(buttons)]
+    }
+    requests.post(f"{ZAPI_BASE_URL}/send-buttons", json=payload)
+
+# Função para consultar o Oracle WMS
+def consultar_oracle(filtro_item=None, somente_recebimento=False, enderecado=False):
     try:
-        # Monta query conforme tipo de busca
-        url = f"{WMS_URL}?values_list=item_id__code,container_id__container_nbr,location_id__locn_str,container_id__status_id__description,curr_qty"
-
+        url = ORACLE_API_URL
         if filtro_item:
             url += f"&item_id__code={filtro_item}"
-
-        if recebimento:
-            url += "&container_id__status_id__description=Received"
-
-        # Autenticação no WMS
-        resp = requests.get(url, auth=(WMS_LOGIN, WMS_PASSWORD))
-        resp.raise_for_status()
-        data = resp.json()
-
-        if not data.get("results"):
-            return "⚠️ Nenhum registro encontrado."
+        headers = {
+            "Authorization": ORACLE_AUTH
+        }
+        response = requests.get(url, headers=headers)
+        data = response.json()
 
         located = []
         received = []
-        for r in data["results"]:
-            status = r.get("container_id__status_id__description", "")
-            qty = int(r.get("curr_qty", 0))
-            lpn = r.get("container_id__container_nbr", "")
-            loc = r.get("location_id__locn_str", "")
+        total_located = 0
+        total_received = 0
+
+        for item in data.get("items", []):
+            status = item.get("container_id__status_id__description", "")
+            lpn = item.get("container_id__container_nbr", "-")
+            qty = item.get("curr_qty", 0)
+            endereco = item.get("location_id__locn_str", "-")
 
             if status == "Located":
-                if enderecado:
-                    located.append(f"- LPN: {lpn} | Qtd: {qty} | 📍 Endereço: {loc}")
-                else:
-                    located.append(f"- LPN: {lpn} | Qtd: {qty}")
+                total_located += qty
+                located.append(f"- LPN: {lpn} | Qtd: {qty}" + (f" | 📍 {endereco}" if enderecado else ""))
             elif status == "Received":
-                received.append(f"- LPN: {lpn} | Qtd: {qty}")
+                total_received += qty
+                received.append(f"- LPN: {lpn} | Qtd: {qty}" + (f" | 📍 {endereco}" if enderecado else ""))
 
-        total_located = sum(int(r.get("curr_qty", 0)) for r in data["results"] if r.get("container_id__status_id__description") == "Located")
-        total_received = sum(int(r.get("curr_qty", 0)) for r in data["results"] if r.get("container_id__status_id__description") == "Received")
+        # Montar resposta
+        if somente_recebimento:
+            if not received:
+                return "📦 Nenhuma LPN encontrada no recebimento."
+            return "📦 LPNs no recebimento:\n" + "\n".join(received)
 
         resposta = f"📦 Saldo para o item: {filtro_item if filtro_item else 'Todos'}\n\n"
         if located:
@@ -84,70 +82,67 @@ def consultar_wms(filtro_item=None, enderecado=False, recebimento=False):
         if received:
             resposta += "🔸 Received (Ainda em recebimento)\n" + "\n".join(received) + "\n\n"
         resposta += f"📊 Total localizado: {total_located}\n📊 Total recebido: {total_received}"
+
         return resposta.strip()
+    except Exception as e:
+        return f"⚠️ Erro ao consultar Oracle WMS: {str(e)}"
+
+# Webhook para receber mensagens
+@app.post("/webhook")
+async def webhook(request: Request):
+    try:
+        # Tenta pegar como JSON
+        try:
+            data = await request.json()
+        except:
+            # Se não for JSON, tenta pegar como form-urlencoded
+            form_data = await request.form()
+            data = dict(form_data)
+
+        phone = data.get("phone", "")
+        message = data.get("message", "").strip()
+
+        # Se o usuário pedir para iniciar o menu
+        if message.lower() == "consultar ambiente tpi":
+            send_whatsapp_buttons(phone, "Escolha uma opção para consultar:", [
+                "Saldo no recebimento",
+                "Saldo de um item",
+                "Saldo de um item endereçado"
+            ])
+            return JSONResponse(content={"status": "ok"})
+
+        # Lógica para cada opção
+        if message == "Saldo no recebimento":
+            resposta = consultar_oracle(somente_recebimento=True)
+            send_whatsapp_message(phone, resposta)
+            return JSONResponse(content={"status": "ok"})
+
+        if message == "Saldo de um item":
+            user_state[phone] = {"acao": "saldo_item"}
+            send_whatsapp_message(phone, "🔍 Informe o código do item que deseja consultar:")
+            return JSONResponse(content={"status": "ok"})
+
+        if message == "Saldo de um item endereçado":
+            user_state[phone] = {"acao": "saldo_item_enderecado"}
+            send_whatsapp_message(phone, "🔍 Informe o código do item que deseja consultar com endereços:")
+            return JSONResponse(content={"status": "ok"})
+
+        # Quando o usuário está no estado de digitar o item
+        if phone in user_state:
+            acao = user_state[phone]["acao"]
+            if acao == "saldo_item":
+                resposta = consultar_oracle(filtro_item=message)
+                send_whatsapp_message(phone, resposta)
+            elif acao == "saldo_item_enderecado":
+                resposta = consultar_oracle(filtro_item=message, enderecado=True)
+                send_whatsapp_message(phone, resposta)
+            del user_state[phone]
+            return JSONResponse(content={"status": "ok"})
+
+        return JSONResponse(content={"status": "ignorado"})
 
     except Exception as e:
-        return f"❌ Erro ao consultar WMS: {e}"
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
-# =========================
-# FLUXO WHATSAPP
-# =========================
-@app.post("/webhook")
-async def webhook(msg: WhatsAppMessage):
-    texto = msg.text.strip()
-    phone = msg.phone
-
-    # Se usuário iniciar com comando
-    if texto.lower() == "consultar ambiente tpi":
-        send_whatsapp_buttons(
-            phone,
-            "📋 Escolha uma opção:",
-            ["📦 Saldo no Recebimento", "🔍 Saldo por Item", "🏷 Saldo por Item Endereçado"]
-        )
-        return {"status": "menu_enviado"}
-
-    # Opção 1: Saldo no Recebimento
-    if texto == "📦 Saldo no Recebimento":
-        resposta = consultar_wms(recebimento=True)
-        send_whatsapp_message(phone, resposta)
-        send_whatsapp_buttons(
-            phone,
-            "Deseja fazer outra consulta?",
-            ["📦 Saldo no Recebimento", "🔍 Saldo por Item", "🏷 Saldo por Item Endereçado"]
-        )
-        return {"status": "saldo_recebimento"}
-
-    # Opção 2: Saldo por Item (pedir código)
-    if texto == "🔍 Saldo por Item":
-        send_whatsapp_message(phone, "✏️ Informe o código do item:")
-        return {"status": "aguardando_item"}
-
-    # Opção 3: Saldo por Item Endereçado (pedir código)
-    if texto == "🏷 Saldo por Item Endereçado":
-        send_whatsapp_message(phone, "✏️ Informe o código do item para busca com endereço:")
-        return {"status": "aguardando_item_enderecado"}
-
-    # Se usuário enviou código após pedir
-    if texto.upper().startswith("ITEM "):
-        item_code = texto.replace("ITEM ", "").strip()
-        resposta = consultar_wms(filtro_item=item_code)
-        send_whatsapp_message(phone, resposta)
-        send_whatsapp_buttons(
-            phone,
-            "Deseja fazer outra consulta?",
-            ["📦 Saldo no Recebimento", "🔍 Saldo por Item", "🏷 Saldo por Item Endereçado"]
-        )
-        return {"status": "item_consultado"}
-
-    if texto.upper().startswith("ENDERECADO "):
-        item_code = texto.replace("ENDERECADO ", "").strip()
-        resposta = consultar_wms(filtro_item=item_code, enderecado=True)
-        send_whatsapp_message(phone, resposta)
-        send_whatsapp_buttons(
-            phone,
-            "Deseja fazer outra consulta?",
-            ["📦 Saldo no Recebimento", "🔍 Saldo por Item", "🏷 Saldo por Item Endereçado"]
-        )
-        return {"status": "item_enderecado_consultado"}
-
-    return {"status": "ignorado"}
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=10000)
