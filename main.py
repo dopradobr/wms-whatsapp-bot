@@ -5,6 +5,7 @@ import uvicorn
 
 app = FastAPI()
 
+
 # 🔹 Lendo variáveis de ambiente
 ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
 ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
