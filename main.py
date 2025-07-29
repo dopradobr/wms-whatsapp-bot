@@ -18,6 +18,7 @@ WMS_PASSWORD = os.getenv("WMS_PASSWORD")  # Senha WMS
 # =========================
 app = FastAPI()
 
+
 # Modelo de recebimento de mensagens do WhatsApp
 class WhatsAppMessage(BaseModel):
     phone: str
