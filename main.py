@@ -1,74 +1,78 @@
-import os
-import requests
 from fastapi import FastAPI, Request
-import uvicorn
+import httpx
+import os
+import logging
 
+# Inicializa a aplicação FastAPI e configura o logger
 app = FastAPI()
+logging.basicConfig(level=logging.INFO)
 
-
-# 🔹 Lendo variáveis de ambiente
-ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
-ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
-ZAPI_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_CLIENT_TOKEN}/send-text"
-
+# 🔐 Carrega variáveis de ambiente da Render (configuradas no painel)
+ORACLE_API_URL = os.getenv("ORACLE_API_URL")
 ORACLE_AUTH = os.getenv("ORACLE_AUTH")
-ORACLE_URL = "https://ta3.wms.ocs.oraclecloud.com/tpicomp_test/wms/lgfapi/v10/entity/inventory"
+ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
+ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
+ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
 
-@app.post("/webhook")
-async def webhook(request: Request):
-    data = await request.json()
+# 🔗 Monta a URL base da Z-API com instance e token
+ZAPI_BASE_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}"
 
-    # Apenas processa mensagens recebidas
-    if "text" in data.get("message", {}):
-        mensagem = data["message"]["text"].get("message", "").strip().lower()
-        numero = data["message"]["fromMe"] == False and data["message"]["phone"]
-
-        if mensagem and numero:
-            if "consultar ambiente tpi" in mensagem:
-                resposta = consultar_oracle()
-            else:
-                resposta = "Comando não reconhecido."
-
-            enviar_mensagem(numero, resposta)
-
-    return {"status": "ok"}
-
-
-def consultar_oracle():
-    """Consulta dados no Oracle WMS Cloud"""
-    try:
-        params = {
-            "container_id__status_id__description": "Located",
-            "values_list": "id,item_id__code,location_id__locn_str,curr_qty",
-            "item_id__code": "TESTRM"
-        }
-        headers = {
-            "Authorization": ORACLE_AUTH
-        }
-        r = requests.get(ORACLE_URL, headers=headers, params=params)
-        if r.status_code == 200:
-            dados = r.json()
-            return f"Consulta OK: {len(dados.get('items', []))} registros encontrados."
-        else:
-            return f"Erro Oracle ({r.status_code}): {r.text}"
-    except Exception as e:
-        return f"Erro na consulta Oracle: {str(e)}"
-
-
-def enviar_mensagem(numero, mensagem):
-    """Envia mensagem via Z-API"""
+# 📤 Função para enviar mensagens via Z-API (WhatsApp)
+async def enviar_mensagem(numero: str, mensagem: str):
+    url = f"{ZAPI_BASE_URL}/send-text"
+    headers = {
+        "Content-Type": "application/json",
+        "client-token": ZAPI_CLIENT_TOKEN  # Cabeçalho obrigatório
+    }
     payload = {
         "phone": numero,
         "message": mensagem
     }
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, headers=headers, json=payload)
+        logging.info(f"📨 Resposta da Z-API: {response.status_code} - {response.text}")
+
+# 🔍 Função que consulta o saldo de um item no Oracle WMS Cloud
+async def consultar_saldo(item: str):
+    url = f"{ORACLE_API_URL}&item_id__code={item}"
     headers = {
-        "Content-Type": "application/json"
+        "Authorization": ORACLE_AUTH
     }
-    r = requests.post(ZAPI_URL, json=payload, headers=headers)
-    if r.status_code != 200:
-        print(f"Erro ao enviar mensagem: {r.text}")
-    return r.json()
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("count", 0) > 0:
+                total = sum([float(i.get("curr_qty", 0)) for i in data.get("items", [])])
+                return f"📦 Saldo do item {item}: {total}"
+            else:
+                return f"❌ Nenhum saldo encontrado para o item {item}."
+        else:
+            return f"❌ Erro ao consultar o saldo. Código: {response.status_code}"
 
+# 📥 Endpoint que recebe mensagens do WhatsApp via webhook
+@app.post("/webhook")
+async def webhook(request: Request):
+    payload = await request.json()
+    logging.info(f"📥 Payload recebido: {payload}")
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=10000)
+    try:
+        numero = payload["phone"]
+        texto = payload.get("text", {}).get("message", "").strip()
+        texto_lower = texto.lower()
+
+        # ✅ Só responde se a mensagem contiver "saldo wms "
+        if "saldo wms " in texto_lower:
+            # Extrai o valor após "saldo wms " e transforma em MAIÚSCULO
+            item_raw = texto_lower.split("saldo wms ", 1)[1].strip()
+            item = item_raw.upper()  # Força sempre maiúsculo
+            logging.info(f"🔎 Item extraído: {item}")
+            resposta = await consultar_saldo(item)
+            await enviar_mensagem(numero, resposta)
+        else:
+            logging.info("❌ Mensagem ignorada. Não contém 'saldo wms '.")
+
+    except Exception as e:
+        logging.error(f"❌ Erro ao processar mensagem: {str(e)}")
+
+    return {"status": "ok"}
