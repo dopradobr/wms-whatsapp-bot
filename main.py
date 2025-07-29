@@ -15,15 +15,17 @@ WMS_PASSWORD = os.getenv("WMS_PASSWORD")
 
 # Função para enviar mensagem no WhatsApp via Z-API
 def send_whatsapp_message(phone: str, message: str, buttons=None):
-    url = f"{ZAPI_URL}/message/sendText/{phone}"
-    payload = {"phone": phone, "message": message}
     if buttons:
         url = f"{ZAPI_URL}/message/sendButtons/{phone}"
         payload = {"phone": phone, "message": message, "buttons": buttons}
+    else:
+        url = f"{ZAPI_URL}/message/sendText/{phone}"
+        payload = {"phone": phone, "message": message}
+
     headers = {"Content-Type": "application/json", "apikey": ZAPI_TOKEN}
     requests.post(url, headers=headers, data=json.dumps(payload))
 
-# Função para autenticar no WMS e buscar dados
+# Função para buscar dados no WMS
 def get_wms_data(params):
     session = requests.Session()
     session.auth = (WMS_USER, WMS_PASSWORD)
@@ -32,20 +34,18 @@ def get_wms_data(params):
 
 @app.post("/webhook")
 async def whatsapp_webhook(request: Request):
-    # Captura o payload cru enviado pelo Z-API
     try:
         data = await request.json()
     except:
-        return JSONResponse(content={"status": "error", "message": "Payload não é JSON"}, status_code=400)
+        return JSONResponse(content={"status": "error", "message": "Payload inválido"}, status_code=400)
 
     print("📩 Payload recebido do Z-API:", data)
 
-    # Tentativa de extrair phone e message
-    phone = data.get("phone") or data.get("from") or None
-    message = data.get("message") or data.get("body") or None
+    phone = data.get("phone")
+    message = data.get("message", {}).get("message")
 
     if not phone or not message:
-        return JSONResponse(content={"status": "error", "message": "Campos 'phone' e 'message' não encontrados"}, status_code=400)
+        return JSONResponse(content={"status": "error", "message": "Campos 'phone' e 'message' ausentes"}, status_code=400)
 
     message = message.strip().lower()
 
@@ -67,6 +67,7 @@ async def whatsapp_webhook(request: Request):
             "values_list": "item_id__code,container_id__container_nbr,curr_qty"
         }
         data_wms = get_wms_data(params)
+
         if not data_wms.get("results"):
             send_whatsapp_message(phone, "⚠️ Nenhum LPN encontrado no recebimento.")
             return JSONResponse(content={"status": "ok"})
