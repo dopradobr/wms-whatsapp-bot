@@ -1,122 +1,152 @@
-from fastapi import FastAPI, Request
-import httpx
 import os
-import logging
+import requests
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
+from typing import Optional
 
-# Inicializa a aplicação FastAPI e configura o logger
+# =========================
+# CONFIGURAÇÕES DO AMBIENTE
+# =========================
+ZAPI_URL = os.getenv("ZAPI_URL")  # URL da sua instância Z-API
+ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")  # Token da sua instância Z-API
+WMS_URL = os.getenv("WMS_URL")  # URL base do Oracle WMS Cloud
+WMS_LOGIN = os.getenv("WMS_LOGIN")  # Usuário WMS
+WMS_PASSWORD = os.getenv("WMS_PASSWORD")  # Senha WMS
+
+# =========================
+# APP FASTAPI
+# =========================
 app = FastAPI()
-logging.basicConfig(level=logging.INFO)
 
-# 🔐 Carrega variáveis de ambiente da Render (configuradas no painel)
-ORACLE_API_URL = os.getenv("ORACLE_API_URL")
-ORACLE_AUTH = os.getenv("ORACLE_AUTH")
-ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
-ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
-ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
+# Modelo de recebimento de mensagens do WhatsApp
+class WhatsAppMessage(BaseModel):
+    phone: str
+    text: str
+    messageId: Optional[str] = None
 
-# 🔗 Monta a URL base da Z-API com instance e token
-ZAPI_BASE_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}"
+# Função para enviar mensagem normal no WhatsApp
+def send_whatsapp_message(phone, text):
+    payload = {"phone": phone, "message": text}
+    requests.post(f"{ZAPI_URL}/send-text", headers={"client-token": ZAPI_TOKEN}, json=payload)
 
-# 📤 Função para enviar mensagens via Z-API (WhatsApp)
-async def enviar_mensagem(numero: str, mensagem: str):
-    url = f"{ZAPI_BASE_URL}/send-text"
-    headers = {
-        "Content-Type": "application/json",
-        "client-token": ZAPI_CLIENT_TOKEN  # Cabeçalho obrigatório
-    }
+# Função para enviar botões no WhatsApp
+def send_whatsapp_buttons(phone, body, buttons):
     payload = {
-        "phone": numero,
-        "message": mensagem
+        "phone": phone,
+        "message": body,
+        "buttons": [{"id": f"btn_{i}", "text": btn} for i, btn in enumerate(buttons, start=1)]
     }
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=payload)
-        logging.info(f"📨 Resposta da Z-API: {response.status_code} - {response.text}")
+    requests.post(f"{ZAPI_URL}/send-buttons", headers={"client-token": ZAPI_TOKEN}, json=payload)
 
-# 🔍 Função para consultar o saldo no Oracle WMS no modelo consultivo
-# 🔍 Function to check inventory balance in Oracle WMS (English version)
-async def consultar_saldo(item: str):
-    url = f"{ORACLE_API_URL}&item_id__code={item}"
-    headers = {
-        "Authorization": ORACLE_AUTH
-    }
-
+# Função para consultar saldo no WMS
+def consultar_wms(filtro_item=None, enderecado=False, recebimento=False):
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=headers)
-            data = response.json()
+        # Monta query conforme tipo de busca
+        url = f"{WMS_URL}?values_list=item_id__code,container_id__container_nbr,location_id__locn_str,container_id__status_id__description,curr_qty"
 
-        records = data.get("results", [])
-        if not records:
-            return f"❌ No stock found for item {item}."
+        if filtro_item:
+            url += f"&item_id__code={filtro_item}"
 
-        received = []
+        if recebimento:
+            url += "&container_id__status_id__description=Received"
+
+        # Autenticação no WMS
+        resp = requests.get(url, auth=(WMS_LOGIN, WMS_PASSWORD))
+        resp.raise_for_status()
+        data = resp.json()
+
+        if not data.get("results"):
+            return "⚠️ Nenhum registro encontrado."
+
         located = []
+        received = []
+        for r in data["results"]:
+            status = r.get("container_id__status_id__description", "")
+            qty = int(r.get("curr_qty", 0))
+            lpn = r.get("container_id__container_nbr", "")
+            loc = r.get("location_id__locn_str", "")
 
-        for r in records:
-            status = r.get("container_id__status_id__description", "").lower()
-            info = {
-                "lpn": r.get("container_id__container_nbr", "-"),
-                "qty": int(float(r.get("curr_qty", 0))),
-                "location": r.get("container_id__curr_location_id__locn_str", "-")
-            }
-            if status == "located":
-                located.append(info)
-            else:
-                received.append(info)
+            if status == "Located":
+                if enderecado:
+                    located.append(f"- LPN: {lpn} | Qtd: {qty} | 📍 Endereço: {loc}")
+                else:
+                    located.append(f"- LPN: {lpn} | Qtd: {qty}")
+            elif status == "Received":
+                received.append(f"- LPN: {lpn} | Qtd: {qty}")
 
-        total_located = sum([i["qty"] for i in located])
-        total_received = sum([i["qty"] for i in received])
+        total_located = sum(int(r.get("curr_qty", 0)) for r in data["results"] if r.get("container_id__status_id__description") == "Located")
+        total_received = sum(int(r.get("curr_qty", 0)) for r in data["results"] if r.get("container_id__status_id__description") == "Received")
 
-        response = [f"📦 Inventory balance for item: {item.upper()}", ""]
-
+        resposta = f"📦 Saldo para o item: {filtro_item if filtro_item else 'Todos'}\n\n"
         if located:
-            response.append("🔹 Located (Ready for use)")
-            for i in located:
-                line = f"- LPN: {i['lpn']} | Qty: {i['qty']} | 📍 Location: {i['location']}"
-                response.append(line)
-            response.append("")
-
+            resposta += "🔹 Located (Pronto para uso)\n" + "\n".join(located) + "\n\n"
         if received:
-            response.append("🔸 Received (Pending receipt)")
-            for i in received:
-                line = f"- LPN: {i['lpn']} | Qty: {i['qty']}"
-                response.append(line)
-            response.append("")
-
-        response.append(f"📊 Total Located: {total_located}")
-        response.append(f"📊 Total Received: {total_received}")
-
-        return "\n".join(response)
+            resposta += "🔸 Received (Ainda em recebimento)\n" + "\n".join(received) + "\n\n"
+        resposta += f"📊 Total localizado: {total_located}\n📊 Total recebido: {total_received}"
+        return resposta.strip()
 
     except Exception as e:
-        return f"❌ Error checking inventory: {str(e)}"
+        return f"❌ Erro ao consultar WMS: {e}"
 
-
-
-
-# 📥 Endpoint que recebe mensagens do WhatsApp via webhook
+# =========================
+# FLUXO WHATSAPP
+# =========================
 @app.post("/webhook")
-async def webhook(request: Request):
-    payload = await request.json()
-    logging.info(f"📥 Payload recebido: {payload}")
+async def webhook(msg: WhatsAppMessage):
+    texto = msg.text.strip()
+    phone = msg.phone
 
-    try:
-        numero = payload["phone"]
-        texto = payload.get("text", {}).get("message", "").strip()
-        texto_lower = texto.lower()
+    # Se usuário iniciar com comando
+    if texto.lower() == "consultar ambiente tpi":
+        send_whatsapp_buttons(
+            phone,
+            "📋 Escolha uma opção:",
+            ["📦 Saldo no Recebimento", "🔍 Saldo por Item", "🏷 Saldo por Item Endereçado"]
+        )
+        return {"status": "menu_enviado"}
 
-        # ✅ Só responde se a mensagem contiver "saldo wms "
-        if "saldo wms " in texto_lower:
-            # Extrai o valor após "saldo wms " e transforma em MAIÚSCULO
-            item_raw = texto_lower.split("saldo wms ", 1)[1].strip()
-            item = item_raw.upper()  # Força sempre maiúsculo
-            logging.info(f"🔎 Item extraído: {item}")
-            resposta = await consultar_saldo(item)
-            await enviar_mensagem(numero, resposta)
-        else:
-            logging.info("❌ Mensagem ignorada. Não contém 'saldo wms '.")
+    # Opção 1: Saldo no Recebimento
+    if texto == "📦 Saldo no Recebimento":
+        resposta = consultar_wms(recebimento=True)
+        send_whatsapp_message(phone, resposta)
+        send_whatsapp_buttons(
+            phone,
+            "Deseja fazer outra consulta?",
+            ["📦 Saldo no Recebimento", "🔍 Saldo por Item", "🏷 Saldo por Item Endereçado"]
+        )
+        return {"status": "saldo_recebimento"}
 
-    except Exception as e:
-        logging.error(f"❌ Erro ao processar mensagem: {str(e)}")
+    # Opção 2: Saldo por Item (pedir código)
+    if texto == "🔍 Saldo por Item":
+        send_whatsapp_message(phone, "✏️ Informe o código do item:")
+        return {"status": "aguardando_item"}
 
-    return {"status": "ok"}
+    # Opção 3: Saldo por Item Endereçado (pedir código)
+    if texto == "🏷 Saldo por Item Endereçado":
+        send_whatsapp_message(phone, "✏️ Informe o código do item para busca com endereço:")
+        return {"status": "aguardando_item_enderecado"}
+
+    # Se usuário enviou código após pedir
+    if texto.upper().startswith("ITEM "):
+        item_code = texto.replace("ITEM ", "").strip()
+        resposta = consultar_wms(filtro_item=item_code)
+        send_whatsapp_message(phone, resposta)
+        send_whatsapp_buttons(
+            phone,
+            "Deseja fazer outra consulta?",
+            ["📦 Saldo no Recebimento", "🔍 Saldo por Item", "🏷 Saldo por Item Endereçado"]
+        )
+        return {"status": "item_consultado"}
+
+    if texto.upper().startswith("ENDERECADO "):
+        item_code = texto.replace("ENDERECADO ", "").strip()
+        resposta = consultar_wms(filtro_item=item_code, enderecado=True)
+        send_whatsapp_message(phone, resposta)
+        send_whatsapp_buttons(
+            phone,
+            "Deseja fazer outra consulta?",
+            ["📦 Saldo no Recebimento", "🔍 Saldo por Item", "🏷 Saldo por Item Endereçado"]
+        )
+        return {"status": "item_enderecado_consultado"}
+
+    return {"status": "ignorado"}
