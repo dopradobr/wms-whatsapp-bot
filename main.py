@@ -2,94 +2,146 @@
 import os
 import requests
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import Optional
+import json
 
 app = FastAPI()
 
 # Variáveis de ambiente
-ORACLE_API_URL = os.getenv("ORACLE_API_URL")
-ORACLE_AUTH = os.getenv("ORACLE_AUTH")
-ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
-ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
 ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
+ZAPI_URL = os.getenv("ZAPI_URL")
+WMS_API_URL = os.getenv("WMS_API_URL")
+WMS_USER = os.getenv("WMS_USER")
+WMS_PASSWORD = os.getenv("WMS_PASSWORD")
 
-# Função para enviar mensagem no WhatsApp
-def send_whatsapp_message(phone, message, buttons=None):
+# Função para enviar mensagem no WhatsApp via Z-API
+def send_whatsapp_message(phone: str, message: str, buttons: Optional[list] = None):
+    url = f"{ZAPI_URL}/message/sendText/{phone}"
+    payload = {"phone": phone, "message": message}
     if buttons:
-        url = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-button-message"
+        url = f"{ZAPI_URL}/message/sendButtons/{phone}"
         payload = {
             "phone": phone,
             "message": message,
             "buttons": buttons
         }
-    else:
-        url = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-text"
-        payload = {
-            "phone": phone,
-            "message": message
-        }
+    headers = {"Content-Type": "application/json", "apikey": ZAPI_TOKEN}
+    requests.post(url, headers=headers, data=json.dumps(payload))
 
-    headers = {"Client-Token": ZAPI_CLIENT_TOKEN}
-    requests.post(url, json=payload, headers=headers)
+# Função para autenticar no WMS e buscar dados
+def get_wms_data(params):
+    session = requests.Session()
+    session.auth = (WMS_USER, WMS_PASSWORD)
+    response = session.get(WMS_API_URL, params=params)
+    return response.json()
 
-# Função para consultar saldo no recebimento
-def consultar_lpn_recebimento():
-    resp = requests.get(ORACLE_API_URL, headers={"Authorization": ORACLE_AUTH})
-    if resp.status_code != 200:
-        return "Erro ao consultar Oracle WMS."
-    data = resp.json().get("items", [])
-    lpns = [item["container_id__container_nbr"] for item in data if item.get("container_id__status_id__description") == "Received"]
-    return "\n".join(lpns) if lpns else "Nenhuma LPN encontrada no recebimento."
-
-# Função para consultar saldo de um item
-def consultar_saldo_item(item_code, enderecado=False):
-    resp = requests.get(ORACLE_API_URL, headers={"Authorization": ORACLE_AUTH})
-    if resp.status_code != 200:
-        return "Erro ao consultar Oracle WMS."
-    data = resp.json().get("items", [])
-    resultados = []
-    for item in data:
-        if item.get("item_id__code") == item_code:
-            if enderecado:
-                resultados.append(f"{item['container_id__container_nbr']} - {item['location_id__locn_str']}")
-            else:
-                resultados.append(f"LPN: {item['container_id__container_nbr']} - Qtd: {item['curr_qty']}")
-    return "\n".join(resultados) if resultados else "Nenhum saldo encontrado para este item."
+# Modelo para receber mensagens do WhatsApp
+class WhatsAppMessage(BaseModel):
+    phone: str
+    message: str
 
 @app.post("/webhook")
-async def webhook(request: Request):
-    data = await request.json()
-    phone = data.get("phone")
-    text = data.get("message", "").strip()
+async def whatsapp_webhook(msg: WhatsAppMessage):
+    phone = msg.phone
+    message = msg.message.strip().lower()
 
-    # Início do fluxo
-    if text.lower() == "consultar ambiente tpi":
-        send_whatsapp_message(phone, "Escolha uma das opções abaixo:", buttons=[
-            {"id": "saldo_recebimento", "label": "Saldo no Recebimento"},
-            {"id": "saldo_item", "label": "Saldo Item"},
-            {"id": "saldo_item_end", "label": "Saldo Item Endereçado"}
-        ])
-        return {"status": "ok"}
+    if message == "consultar ambiente tpi":
+        send_whatsapp_message(
+            phone,
+            "📋 Escolha uma opção abaixo:",
+            buttons=[
+                {"id": "saldo_recebimento", "label": "📦 Saldo no Recebimento"},
+                {"id": "saldo_item", "label": "🔍 Saldo por Item"},
+                {"id": "saldo_item_enderecado", "label": "🏷 Saldo por Item Endereçado"}
+            ]
+        )
+        return JSONResponse(content={"status": "ok"})
 
-    # Botão 1 - Saldo no recebimento
-    if text == "saldo_recebimento":
-        resultado = consultar_lpn_recebimento()
-        send_whatsapp_message(phone, resultado)
-        return {"status": "ok"}
+    elif message == "saldo_recebimento":
+        params = {
+            "container_id__status_id__description": "Received",
+            "values_list": "item_id__code,container_id__container_nbr,curr_qty"
+        }
+        data = get_wms_data(params)
+        if not data["results"]:
+            send_whatsapp_message(phone, "⚠️ Nenhum LPN encontrado no recebimento.")
+            return JSONResponse(content={"status": "ok"})
 
-    # Botão 2 - Saldo de item (solicitar código)
-    if text == "saldo_item":
-        send_whatsapp_message(phone, "Por favor, digite o código do item:")
-        return {"status": "ok"}
+        msg_lines = ["📦 Saldo no Recebimento:
+"]
+        for r in data["results"]:
+            msg_lines.append(f"• LPN: {r['container_id__container_nbr']} | Item: {r['item_id__code']} | Qtd: {int(r['curr_qty'])}")
+        msg_lines.append(f"
+📊 Total de LPNs: {len(data['results'])}")
 
-    # Botão 3 - Saldo de item endereçado (solicitar código)
-    if text == "saldo_item_end":
-        send_whatsapp_message(phone, "Por favor, digite o código do item para consulta endereçada:")
-        return {"status": "ok"}
+        send_whatsapp_message(phone, "
+".join(msg_lines))
+        return JSONResponse(content={"status": "ok"})
 
-    # Caso tenha digitado código do item
-    if len(text) >= 3 and text.isalnum():
-        resultado = consultar_saldo_item(text, enderecado=False)
-        send_whatsapp_message(phone, resultado)
-        return {"status": "ok"}
+    elif message == "saldo_item":
+        send_whatsapp_message(phone, "✏️ Digite o código do item para consultar o saldo.")
+        return JSONResponse(content={"status": "ok"})
 
-    return {"status": "ignored"}
+    elif message.startswith("item "):
+        item_code = message.replace("item ", "").strip().upper()
+        params = {
+            "item_id__code": item_code,
+            "values_list": "item_id__code,container_id__container_nbr,curr_qty,location_id__locn_str,container_id__status_id__description"
+        }
+        data = get_wms_data(params)
+
+        if not data["results"]:
+            send_whatsapp_message(phone, f"⚠️ Nenhum saldo encontrado para o item {item_code}.")
+            return JSONResponse(content={"status": "ok"})
+
+        located = [r for r in data["results"] if r["container_id__status_id__description"] == "Located"]
+        received = [r for r in data["results"] if r["container_id__status_id__description"] == "Received"]
+
+        msg_lines = [f"📦 Saldo para o item: {item_code}
+"]
+        if located:
+            msg_lines.append("🔹 Located (Pronto para uso)")
+            for r in located:
+                msg_lines.append(f"- LPN: {r['container_id__container_nbr']} | Qtd: {int(r['curr_qty'])} | 📍 Endereço: {r['location_id__locn_str']}")
+        if received:
+            msg_lines.append("
+🔸 Received (Ainda em recebimento)")
+            for r in received:
+                msg_lines.append(f"- LPN: {r['container_id__container_nbr']} | Qtd: {int(r['curr_qty'])}")
+
+        msg_lines.append(f"
+📊 Total localizado: {sum(int(r['curr_qty']) for r in located)}")
+        msg_lines.append(f"📊 Total recebido: {sum(int(r['curr_qty']) for r in received)}")
+
+        send_whatsapp_message(phone, "
+".join(msg_lines))
+        return JSONResponse(content={"status": "ok"})
+
+    elif message == "saldo_item_enderecado":
+        send_whatsapp_message(phone, "✏️ Digite o código do item para consultar com endereço.")
+        return JSONResponse(content={"status": "ok"})
+
+    elif message.startswith("item_end "):
+        item_code = message.replace("item_end ", "").strip().upper()
+        params = {
+            "item_id__code": item_code,
+            "values_list": "item_id__code,container_id__container_nbr,curr_qty,location_id__locn_str"
+        }
+        data = get_wms_data(params)
+
+        if not data["results"]:
+            send_whatsapp_message(phone, f"⚠️ Nenhum saldo encontrado para o item {item_code}.")
+            return JSONResponse(content={"status": "ok"})
+
+        msg_lines = [f"🏷 Saldo para o item: {item_code}
+"]
+        for r in data["results"]:
+            msg_lines.append(f"- LPN: {r['container_id__container_nbr']} | 📍 Endereço: {r['location_id__locn_str']} | Qtd: {int(r['curr_qty'])}")
+
+        send_whatsapp_message(phone, "
+".join(msg_lines))
+        return JSONResponse(content={"status": "ok"})
+
+    return JSONResponse(content={"status": "ignored"})
