@@ -1,84 +1,55 @@
-import os
-import requests
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-import json
+import requests
+import threading
+import os
 
 app = FastAPI()
 
-# Variáveis de ambiente
-ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
-ZAPI_URL = os.getenv("ZAPI_URL")
-WMS_API_URL = os.getenv("WMS_API_URL")
-WMS_USER = os.getenv("WMS_USER")
-WMS_PASSWORD = os.getenv("WMS_PASSWORD")
+ZAPI_URL = os.getenv("ZAPI_URL", "https://api.z-api.io/instances/YOUR_INSTANCE/token/YOUR_TOKEN/send-text")
+ZAPI_INSTANCE_TOKEN = os.getenv("ZAPI_INSTANCE_TOKEN", "YOUR_INSTANCE_TOKEN")
+ZAPI_API_TOKEN = os.getenv("ZAPI_API_TOKEN", "YOUR_API_TOKEN")
 
-# Função para enviar mensagem no WhatsApp via Z-API
-def send_whatsapp_message(phone: str, message: str, buttons=None):
-    if buttons:
-        url = f"{ZAPI_URL}/message/sendButtons/{phone}"
-        payload = {"phone": phone, "message": message, "buttons": buttons}
-    else:
-        url = f"{ZAPI_URL}/message/sendText/{phone}"
-        payload = {"phone": phone, "message": message}
+# Função para enviar mensagem no WhatsApp
+def send_message(phone: str, text: str):
+    payload = {
+        "phone": phone,
+        "message": text
+    }
+    headers = {
+        "Client-Token": ZAPI_API_TOKEN
+    }
+    try:
+        r = requests.post(ZAPI_URL, json=payload, headers=headers)
+        print("Resposta Z-API:", r.status_code, r.text)
+    except Exception as e:
+        print("Erro ao enviar mensagem:", e)
 
-    headers = {"Content-Type": "application/json", "apikey": ZAPI_TOKEN}
-    requests.post(url, headers=headers, data=json.dumps(payload))
-
-# Função para buscar dados no WMS
-def get_wms_data(params):
-    session = requests.Session()
-    session.auth = (WMS_USER, WMS_PASSWORD)
-    response = session.get(WMS_API_URL, params=params)
-    return response.json()
+# Função para processar consulta no Oracle WMS Cloud
+def consultar_wms(phone: str, mensagem: str):
+    try:
+        # Aqui você coloca a lógica de integração real com Oracle WMS Cloud
+        resultado = f"📦 Resultado fictício para: {mensagem}"  
+        send_message(phone, resultado)
+    except Exception as e:
+        send_message(phone, f"❌ Erro ao consultar: {str(e)}")
 
 @app.post("/webhook")
-async def whatsapp_webhook(request: Request):
+async def webhook(req: Request):
+    data = await req.json()
+    print("Payload recebido:", data)
+
     try:
-        data = await request.json()
-    except:
-        return JSONResponse(content={"status": "error", "message": "Payload inválido"}, status_code=400)
+        mensagem = data.get("text", {}).get("message", "").strip()
+        telefone = data.get("phone", "")
 
-    print("📩 Payload recebido do Z-API:", data)
+        if mensagem:
+            # Responde imediatamente para evitar timeout
+            send_message(telefone, "✅ Solicitação recebida! Processando...")
 
-    phone = data.get("phone")
-    message = data.get("text", {}).get("message")
+            # Processa em segundo plano
+            threading.Thread(target=consultar_wms, args=(telefone, mensagem)).start()
 
+    except Exception as e:
+        print("Erro no webhook:", e)
 
-    if not phone or not message:
-        return JSONResponse(content={"status": "error", "message": "Campos 'phone' e 'message' ausentes"}, status_code=400)
-
-    message = message.strip().lower()
-
-    if message == "consultar ambiente tpi":
-        send_whatsapp_message(
-            phone,
-            "📋 Escolha uma opção abaixo:",
-            buttons=[
-                {"id": "saldo_recebimento", "label": "📦 Saldo no Recebimento"},
-                {"id": "saldo_item", "label": "🔍 Saldo por Item"},
-                {"id": "saldo_item_enderecado", "label": "🏷 Saldo por Item Endereçado"}
-            ]
-        )
-        return JSONResponse(content={"status": "ok"})
-
-    elif message == "saldo_recebimento":
-        params = {
-            "container_id__status_id__description": "Received",
-            "values_list": "item_id__code,container_id__container_nbr,curr_qty"
-        }
-        data_wms = get_wms_data(params)
-
-        if not data_wms.get("results"):
-            send_whatsapp_message(phone, "⚠️ Nenhum LPN encontrado no recebimento.")
-            return JSONResponse(content={"status": "ok"})
-
-        msg_lines = ["📦 Saldo no Recebimento:"]
-        for r in data_wms["results"]:
-            msg_lines.append(f"• LPN: {r['container_id__container_nbr']} | Item: {r['item_id__code']} | Qtd: {int(r['curr_qty'])}")
-        msg_lines.append(f"📊 Total de LPNs: {len(data_wms['results'])}")
-
-        send_whatsapp_message(phone, "\n".join(msg_lines))
-        return JSONResponse(content={"status": "ok"})
-
-    return JSONResponse(content={"status": "ignored"})
+    return {"status": "ok"}
