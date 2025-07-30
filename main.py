@@ -57,10 +57,10 @@ async def send_button_list(phone: str):
         "message": "Escolha uma opção para consultar o WMS:",
         "buttonList": {
             "buttons": [
-                {"id": "1", "label": "📦 LPN Receiving"},
-                {"id": "2", "label": "📦 Stored Items"},
-                {"id": "3", "label": "🔍 Balance WMS"},
-                {"id": "4", "label": "📍 Items by Location"}
+                {"id": "1", "label": "LPN Receiving"},
+                {"id": "2", "label": "Stored Items"},
+                {"id": "3", "label": "Balance WMS"},
+                {"id": "4", "label": "Items by Location"}
             ]
         }
     }
