@@ -2,7 +2,6 @@ from fastapi import FastAPI, Request
 import httpx
 import os
 import logging
-from collections import defaultdict
 
 # ===========================================
 # 🚀 Initialize FastAPI app and Logger
@@ -13,8 +12,8 @@ logging.basicConfig(level=logging.INFO)
 # ===========================================
 # 🔐 Environment Variables (Render)
 # ===========================================
-ORACLE_API_URL = os.getenv("ORACLE_API_URL")
-ORACLE_AUTH = os.getenv("ORACLE_AUTH")
+ORACLE_API_URL = os.getenv("ORACLE_API_URL")  # Base URL for Oracle WMS API
+ORACLE_AUTH = os.getenv("ORACLE_AUTH")        # Oracle WMS API Authorization Token
 
 ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
 ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
@@ -32,7 +31,10 @@ async def send_message(phone: str, message: str):
         "Content-Type": "application/json",
         "client-token": ZAPI_CLIENT_TOKEN
     }
-    payload = {"phone": phone, "message": message}
+    payload = {
+        "phone": phone,
+        "message": message
+    }
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.post(url, headers=headers, json=payload)
         logging.info(f"📨 Z-API Response: {response.status_code} - {response.text}")
@@ -58,7 +60,7 @@ async def query_lpn_receiving():
     return "\n".join(response)
 
 # ===========================================
-# 📦 2 - Query Stored Items (Grouped by Location)
+# 📦 2 - Query Stored Items (Ordered by Location)
 # ===========================================
 async def query_stored_items():
     url = f"{ORACLE_API_URL}&container_id__status_id__description=Located"
@@ -72,23 +74,12 @@ async def query_stored_items():
     if not results:
         return "📦 No stored items found."
 
-    # Group items by location
-    grouped = defaultdict(list)
-    for rec in results:
-        location = rec.get("container_id__curr_location_id__locn_str", "-")
-        grouped[location].append({
-            "item": rec.get("item_id__code"),
-            "qty": rec.get("curr_qty")
-        })
-
-    # Sort locations alphabetically
-    sorted_locations = sorted(grouped.keys())
+    # Sort by location
+    results_sorted = sorted(results, key=lambda x: x.get("container_id__curr_location_id__locn_str", ""))
 
     response = ["📦 *Stored Items:*"]
-    for loc in sorted_locations:
-        response.append(f"📍 {loc}")
-        for item in grouped[loc]:
-            response.append(f" - Item: `{item['item']}` | Qty: *{item['qty']}*")
+    for rec in results_sorted:
+        response.append(f"• Item: `{rec.get('item_id__code')}` | Qty: *{rec.get('curr_qty')}* | 📍 {rec.get('container_id__curr_location_id__locn_str')}")
     return "\n".join(response)
 
 # ===========================================
@@ -113,7 +104,7 @@ async def query_item_balance(item: str):
         for r in records:
             status = r.get("container_id__status_id__description", "").lower()
             info = {
-                "lpn": r.get("container_id__container_nbr', '-')",
+                "lpn": r.get("container_id__container_nbr", "-"),
                 "qty": int(float(r.get("curr_qty", 0))),
                 "location": r.get("container_id__curr_location_id__locn_str") or "-"
             }
