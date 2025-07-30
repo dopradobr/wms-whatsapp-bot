@@ -163,12 +163,20 @@ async def webhook(request: Request):
 
     try:
         phone = payload.get("phone")
-        text = payload.get("text", {}).get("message", "").strip().lower()
+        text = ""
+
+        # Captura mensagem digitada
+        if "text" in payload and "message" in payload["text"]:
+            text = payload["text"]["message"].strip().lower()
+
+        # Captura clique de botão
+        elif "buttonsResponseMessage" in payload and "message" in payload["buttonsResponseMessage"]:
+            text = payload["buttonsResponseMessage"]["message"].strip().lower()
 
         # 🔹 Ativação
         if text == "consulta o wms":
             activated_users[phone] = True
-            await send_button_list(phone)  # Envia botões no lugar da mensagem fixa
+            await send_button_list(phone)
             return {"status": "ok"}
 
         # 🔹 Ignora quem não ativou
