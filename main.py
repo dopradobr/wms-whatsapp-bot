@@ -32,23 +32,67 @@ async def enviar_mensagem(numero: str, mensagem: str):
         response = await client.post(url, headers=headers, json=payload)
         logging.info(f"📨 Resposta da Z-API: {response.status_code} - {response.text}")
 
-# 🔍 Função que consulta o saldo de um item no Oracle WMS Cloud
+# 🔍 Função para consultar o saldo no Oracle WMS no modelo consultivo
+# 🔍 Function to check inventory balance in Oracle WMS (English version)
 async def consultar_saldo(item: str):
     url = f"{ORACLE_API_URL}&item_id__code={item}"
     headers = {
         "Authorization": ORACLE_AUTH
     }
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, headers=headers)
-        if response.status_code == 200:
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
             data = response.json()
-            if data.get("count", 0) > 0:
-                total = sum([float(i.get("curr_qty", 0)) for i in data.get("items", [])])
-                return f"📦 Saldo do item {item}: {total}"
+
+        records = data.get("results", [])
+        if not records:
+            return f"❌ No stock found for item {item}."
+
+        received = []
+        located = []
+
+        for r in records:
+            status = r.get("container_id__status_id__description", "").lower()
+            info = {
+                "lpn": r.get("container_id__container_nbr", "-"),
+                "qty": int(float(r.get("curr_qty", 0))),
+                "location": r.get("container_id__curr_location_id__locn_str", "-")
+            }
+            if status == "located":
+                located.append(info)
             else:
-                return f"❌ Nenhum saldo encontrado para o item {item}."
-        else:
-            return f"❌ Erro ao consultar o saldo. Código: {response.status_code}"
+                received.append(info)
+
+        total_located = sum([i["qty"] for i in located])
+        total_received = sum([i["qty"] for i in received])
+
+        response = [f"📦 Inventory balance for item: {item.upper()}", ""]
+
+        if located:
+            response.append("🔹 Located (Ready for use)")
+            for i in located:
+                line = f"- LPN: {i['lpn']} | Qty: {i['qty']} | 📍 Location: {i['location']}"
+                response.append(line)
+            response.append("")
+
+        if received:
+            response.append("🔸 Received (Pending receipt)")
+            for i in received:
+                line = f"- LPN: {i['lpn']} | Qty: {i['qty']}"
+                response.append(line)
+            response.append("")
+
+        response.append(f"📊 Total Located: {total_located}")
+        response.append(f"📊 Total Received: {total_received}")
+
+        return "\n".join(response)
+
+    except Exception as e:
+        return f"❌ Error checking inventory: {str(e)}"
+
+
+
 
 # 📥 Endpoint que recebe mensagens do WhatsApp via webhook
 @app.post("/webhook")
