@@ -14,12 +14,11 @@ logging.basicConfig(level=logging.INFO)
 # ===========================================
 ORACLE_API_URL = os.getenv("ORACLE_API_URL")
 ORACLE_AUTH = os.getenv("ORACLE_AUTH")
-
 ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID")
 ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
 ZAPI_CLIENT_TOKEN = os.getenv("ZAPI_CLIENT_TOKEN")
 
-# Base URL Z-API
+# Base URL para mensagens Z-API
 ZAPI_BASE_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}"
 
 # ===========================================
@@ -28,7 +27,7 @@ ZAPI_BASE_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_
 activated_users = {}
 
 # ===========================================
-# 📤 Send WhatsApp Text
+# 📤 Envia mensagem texto
 # ===========================================
 async def send_message(phone: str, message: str):
     url = f"{ZAPI_BASE_URL}/send-text"
@@ -36,13 +35,16 @@ async def send_message(phone: str, message: str):
         "Content-Type": "application/json",
         "client-token": ZAPI_CLIENT_TOKEN
     }
-    payload = {"phone": phone, "message": message}
+    payload = {
+        "phone": phone,
+        "message": message
+    }
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(url, headers=headers, json=payload)
-        logging.info(f"📨 send_message status {r.status_code}: {r.text}")
+        response = await client.post(url, headers=headers, json=payload)
+        logging.info(f"📨 Z-API Response: {response.status_code} - {response.text}")
 
 # ===========================================
-# 📤 Send WhatsApp Button List Menu
+# 📤 Envia lista de botões
 # ===========================================
 async def send_button_list(phone: str):
     url = f"{ZAPI_BASE_URL}/send-button-list"
@@ -52,30 +54,22 @@ async def send_button_list(phone: str):
     }
     payload = {
         "phone": phone,
-        "message": "📋 *Consulta WMS* - Escolha uma opção:",
+        "message": "Escolha uma opção para consultar o WMS:",
         "buttonList": {
-            "title": "Menu de Consultas",
-            "description": "Selecione a consulta desejada:",
-            "footerText": "WMS Bot",
-            "sections": [
-                {
-                    "title": "Consultas Rápidas",
-                    "rows": [
-                        {"title": "📦 LPN Receiving", "description": "Ver LPNs em recebimento"},
-                        {"title": "📦 Stored Items", "description": "Ver itens armazenados"},
-                        {"title": "📦 Balance WMS ITEM123", "description": "Consultar saldo de um item"},
-                        {"title": "📍 Location A01-01-01", "description": "Itens em um local específico"}
-                    ]
-                }
+            "buttons": [
+                {"id": "1", "label": "📦 LPN Receiving"},
+                {"id": "2", "label": "📦 Stored Items"},
+                {"id": "3", "label": "🔍 Balance WMS"},
+                {"id": "4", "label": "📍 Items by Location"}
             ]
         }
     }
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(url, headers=headers, json=payload)
-        logging.info(f"📨 send_button_list status {r.status_code}: {r.text}")
+        response = await client.post(url, headers=headers, json=payload)
+        logging.info(f"📨 Z-API Button List Response: {response.status_code} - {response.text}")
 
 # ===========================================
-# 📦 1 - Query LPNS in Receiving
+# 📦 Funções de consulta Oracle WMS
 # ===========================================
 async def query_lpn_receiving():
     url = f"{ORACLE_API_URL}&container_id__status_id__description=Received"
@@ -91,9 +85,6 @@ async def query_lpn_receiving():
         response.append(f"• LPN: `{rec.get('container_id__container_nbr')}` | Qty: *{rec.get('curr_qty')}* | Item: {rec.get('item_id__code')}")
     return "\n".join(response)
 
-# ===========================================
-# 📦 2 - Query Stored Items
-# ===========================================
 async def query_stored_items():
     url = f"{ORACLE_API_URL}&container_id__status_id__description=Located"
     headers = {"Authorization": ORACLE_AUTH}
@@ -109,9 +100,6 @@ async def query_stored_items():
         response.append(f"• Item: `{rec.get('item_id__code')}` | Qty: *{rec.get('curr_qty')}* | 📍 {rec.get('container_id__curr_location_id__locn_str')}")
     return "\n".join(response)
 
-# ===========================================
-# 📦 3 - Query Item Balance
-# ===========================================
 async def query_item_balance(item: str):
     url = f"{ORACLE_API_URL}&item_id__code={item}"
     headers = {"Authorization": ORACLE_AUTH}
@@ -151,9 +139,6 @@ async def query_item_balance(item: str):
     response.append(f"📊 Total Received: *{total_received}*")
     return "\n".join(response)
 
-# ===========================================
-# 📦 4 - Query Items by Location
-# ===========================================
 async def query_items_by_location(location: str):
     url = f"{ORACLE_API_URL}&location_id__locn_str={location}"
     headers = {"Authorization": ORACLE_AUTH}
@@ -180,18 +165,18 @@ async def webhook(request: Request):
         phone = payload.get("phone")
         text = payload.get("text", {}).get("message", "").strip().lower()
 
-        # Ativação
+        # 🔹 Ativação
         if text == "consulta o wms":
             activated_users[phone] = True
-            await send_message(phone, "✅ Bot ativado! Use o menu abaixo para escolher uma consulta.")
-            await send_button_list(phone)
+            await send_button_list(phone)  # Envia botões no lugar da mensagem fixa
             return {"status": "ok"}
 
-        # Se não ativou ainda, ignora
+        # 🔹 Ignora quem não ativou
         if phone not in activated_users:
+            logging.info(f"🚫 Ignorado: {phone} ainda não ativou o bot.")
             return {"status": "ignored"}
 
-        # Comandos
+        # 🔹 Lista de comandos
         exact_commands = ["lpn receiving", "stored items"]
         prefix_commands = ["balance wms ", "location "]
         response = None
@@ -201,7 +186,7 @@ async def webhook(request: Request):
                 response = await query_lpn_receiving()
             elif text == "stored items":
                 response = await query_stored_items()
-        elif any(text.startswith(p) for p in prefix_commands):
+        elif any(text.startswith(prefix) for prefix in prefix_commands):
             if text.startswith("balance wms "):
                 item = text.split("balance wms ", 1)[1].strip().upper()
                 if item:
@@ -212,6 +197,7 @@ async def webhook(request: Request):
                     response = await query_items_by_location(location)
 
         if not response:
+            logging.info(f"🚫 Comando inválido de {phone}, ignorado.")
             return {"status": "ignored"}
 
         await send_message(phone, response)
